@@ -1,9 +1,16 @@
 # WishList Telegram Bot (telebot + SQLite)
 
 ## Features
-- `/start` sends `hwlloworld` with an inline **Show** button
-- User command hints: ** Show** (`/show`) and **My bookings** (`/mybookings`)
+- `/start` sends short invitation message with an inline **Show** button
+- User command hints: **Show** (`/show`) and **My bookings** (`/mybookings`)
 - **Show** lists item names from an SQLite DB
+- **My bookings** lists user-specific bookings from the DB
+- User can book/unbook items via inline buttons
+- Admin command hints: **Add item** (`/additem`), **Delete item** (`/delete:itemId`), **Update item** (`/update:name|desc|link|photo:itemId`), **Mark as gifted** (`/gift:itemId`)
+- Admin-only access to add/update/delete items 
+-  Admin can mark items as gifted
+
+
 
 ## Setup
 1. **Create a bot** with BotFather and copy the token.
@@ -11,3 +18,6 @@
    ```bash
    cp .env.dev .env
    # put your token in BOT_TOKEN=
+   # optionally set DB_PATH= to your SQLite DB path
+   # put your admin user ID in ADMIN_USER_ID=
+   ```

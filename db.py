@@ -135,21 +135,50 @@ def try_book_present(present_id: int, giver_chat_id: int) -> dict:
             (giver_chat_id, present_id),
         )
         conn.commit()
+        return cur.rowcount == 1
 
-        # Load the fresh row state
-        row = conn.execute(
+    finally:
+        conn.close()
+
+def try_unbook_present(present_id: int, chat_id: int ) -> dict:
+    """
+    Attempt to unbook the present, previouusly booked (set is_booked=0, giver_chat_id empty)
+    """
+    conn = get_conn()
+    try:
+        
+        cur = conn.execute(
             """
-            SELECT *
-              FROM presents
+            UPDATE presents
+               SET is_booked = 0,
+                   giver_chat_id = ""
+             WHERE id = ? AND giver_chat_id = ?
+            """,
+            (present_id,chat_id),
+        )
+        conn.commit()
+
+        return cur.rowcount == 1
+
+    finally:
+        conn.close()
+
+def try_gift_present(present_id: int) -> dict:
+    """
+    Attempt to change status of the present to gifted
+    """
+    conn = get_conn()
+    try:
+        
+        cur = conn.execute(
+            """
+            UPDATE presents
+               SET is_gifted = 1
              WHERE id = ?
             """,
             (present_id,),
-        ).fetchone()
-
-        if not row:
-            return {"status": "not_found"}
-
-        r = dict(row)
+        )
+        conn.commit()
 
         return cur.rowcount == 1
 
