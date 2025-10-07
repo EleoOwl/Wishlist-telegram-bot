@@ -4,7 +4,20 @@ import html
 from typing import List
 
 from config import BOT_TOKEN, ADMIN_USER_ID
-from db import init_db, create_present, get_present_by_id, try_book_present, list_presents, list_booked_presents,try_delete_present
+from db import (
+    init_db, 
+    create_present, 
+    get_present_by_id, 
+    try_book_present,
+    try_unbook_present, 
+    try_unbook_present,
+    try_gift_present,
+    list_presents, 
+    list_booked_presents,
+    try_delete_present, 
+    set_present_photo_url, 
+    set_present_link, 
+    set_present_description)
 from helpers import make_show_keyboard, is_admin, parse_additem_payload
 
 # --- Bootstrapping ---
@@ -20,8 +33,7 @@ PUBLIC_COMMANDS = [
 bot.set_my_commands(PUBLIC_COMMANDS)
 
 
-# --- Admin-specific command list (only for the admin's private chat) ---
-# Uses command scopes to show an extra "Edit list" command to the admin user only.
+# --- Admin-specific command list ---
 if ADMIN_USER_ID:
     ADMIN_COMMANDS = PUBLIC_COMMANDS + [
         types.BotCommand("additem", "Add item")
@@ -32,7 +44,6 @@ if ADMIN_USER_ID:
             scope=types.BotCommandScopeChat(chat_id=ADMIN_USER_ID)
         )
     except Exception as e:
-        # Non-fatal; commands still work even if Telegram refuses the scope (e.g., user hasn't opened the bot)
         print(f"Warning: failed to set admin commands scope: {e}")
 
 
@@ -60,12 +71,11 @@ def show_present(chat_id: int, present_id: int) -> None:
         return
 
     # Build an HTML-safe message
-    
     esc = html.escape
     lines = [f"<b>{esc(data['name'] or '')}</b>"]
 
     if data.get("description"):
-        lines.append(f"<b>Description:</b> {esc(data['description'])}")
+        lines.append(f"{esc(data['description'])}")
 
     # Price + currency in one line if price present
     price = data.get("price")
@@ -87,24 +97,24 @@ def show_present(chat_id: int, present_id: int) -> None:
     kb = types.InlineKeyboardMarkup()
 
     if (booked and not gifted):
-        lines.append(f"<b>Booked</b>{' by you' if int(data.get("giver_chat_id") or 0) == int(chat_id) else ''}")
-    else:
-      if gifted:
-          lines.append(f"<b>Gifted</b>")
+        lines.append(f"\n<b align='center'>Booked{' by you' if int(data.get("giver_chat_id") or 0) == int(chat_id) else ''}</b>")
+        if int(data.get("giver_chat_id") or 0) == int(chat_id):
+            kb.add(types.InlineKeyboardButton(text="Unbook", callback_data=f"unbook:{data['id']}"))
+    elif gifted:
+          lines.append(f"\n<b align='center'>Gifted</b>")
 
     if (not booked and not gifted):
         kb.add(types.InlineKeyboardButton(text="Book", callback_data=f"book:{data['id']}"))
-    print(f"booked {booked} gifted {gifted}")
     
-    #/// Admin buttons
+    # --- Admin buttons ---
     if is_admin(chat_id):
         kb.add(types.InlineKeyboardButton(text="Edit photo", callback_data=f"edit:{data['id']}:photo"))
         kb.add(types.InlineKeyboardButton(text="Edit link", callback_data=f"edit:{data['id']}:link"))
-        kb.add(types.InlineKeyboardButton(text="Edit description", callback_data=f"book:{data['id']}:desc"))
-        kb.add(types.InlineKeyboardButton(text="Edit name", callback_data=f"book:{data['id']}:desc"))
+        kb.add(types.InlineKeyboardButton(text="Edit description", callback_data=f"edit:{data['id']}:desc"))
         kb.add(types.InlineKeyboardButton(text="Delete", callback_data=f"delete:{data['id']}"))
+        kb.add(types.InlineKeyboardButton(text="Mark gifted", callback_data=f"gift:{data['id']}"))
 
-    if(photo_ref):
+    if photo_ref:
         bot.send_photo(chat_id, photo_ref, caption="\n".join(lines), parse_mode="HTML", reply_markup=kb)
         return
     bot.send_message(chat_id, "\n".join(lines), disable_web_page_preview=True, reply_markup=kb)
@@ -113,10 +123,9 @@ def show_present(chat_id: int, present_id: int) -> None:
 
 @bot.message_handler(commands=["start"])
 def on_start(msg: types.Message):
-    # The user asked for "hwlloworld" exactly; keeping that spelling.
     bot.send_message(
         msg.chat.id,
-        "hwlloworld",
+        "Hello! This bot allows you to know preferred gifts for Owl. Press /show to list preset items. You can book for gist the one you like or unbook if you changed your mind.",
         reply_markup=make_show_keyboard()
     )
 
@@ -128,6 +137,7 @@ def on_show_command(msg: types.Message):
 def on_show_callback(call: types.CallbackQuery):
     bot.answer_callback_query(call.id)
     send_presents_list(call.message.chat.id, list_presents(), "Select a present: ")
+
 
 @bot.message_handler(commands=["mybookings"])
 def on_show_command(msg: types.Message):
@@ -159,14 +169,21 @@ def on_book_clicked(call: types.CallbackQuery):
     else:
         bot.answer_callback_query(call.id, "Cannot book this right now.")
 
-    # Update the existing message in-place to reflect the new state
-    show_present(chat_id, present_id, edit_message_id=call.message.message_id)
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("unbook:"))
+def on_unbook_clicked(call: types.CallbackQuery):
+    chat_id = call.message.chat.id
+    try:
+        present_id = int(call.data.split(":", 1)[1])
+    except Exception:
+        bot.answer_callback_query(call.id, "Invalid present id.")
+        return
 
-
-@bot.message_handler(commands=["mybookings"])
-def on_my_bookings(msg: types.Message):
-    # Placeholder template logic - customize later
-    bot.send_message(msg.chat.id, "You have no bookings yet.")
+    res = try_unbook_present(present_id, chat_id)
+    
+    if res:
+        bot.answer_callback_query(call.id, "Unbooked! Now you are free of this obligation")
+    else:
+        bot.answer_callback_query(call.id, "Cannot unbook this right now.")
 
 @bot.message_handler(commands=["additem"])
 def on_add_item_command(msg: types.Message):
@@ -202,7 +219,7 @@ def handle_add_item_payload(msg: types.Message):
         new_id = create_present(name=name, description=description, price=price_val, currency=currency)
         bot.reply_to(
             msg,
-            f" Added present (id {new_id}).\n\n<b>Saved:</b>\n"
+            f" Present successfully added .\n\n<b>Saved:</b>\n"
             f"- Name: {name}\n"
             f"- Description: {description}\n"
             f"- Price: {price_val} {currency or ''}\n\n"
@@ -215,7 +232,7 @@ def handle_add_item_payload(msg: types.Message):
         bot.register_next_step_handler(sent, handle_add_item_payload)
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("delete:"))
-def on_book_clicked(call: types.CallbackQuery):
+def on_delete_clicked(call: types.CallbackQuery):
     chat_id = call.message.chat.id
     try:
         present_id = int(call.data.split(":", 1)[1])
@@ -230,29 +247,104 @@ def on_book_clicked(call: types.CallbackQuery):
     else:
         bot.answer_callback_query(call.id, "Cannot delete this right now.")
 
-    # Update the existing message in-place to reflect the new state
-    show_present(chat_id, present_id, edit_message_id=call.message.message_id)
-
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("edit:"))
-def on_edit_clicked(call: types.CallbackQuery):
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("gift:"))
+def on_gift_clicked(call: types.CallbackQuery):
     chat_id = call.message.chat.id
     try:
-        present_id = int(call.data.split(":", 2)[1])
-        edit_type = call.data.split(":", 2)[2]  # photo, link, desc, name
+        present_id = int(call.data.split(":", 1)[1])
     except Exception:
         bot.answer_callback_query(call.id, "Invalid present id.")
         return
 
-    bot.send_message(chat_id, f"Editing {edit_type}. Please send the new value or /cancel to abort.")
-    bot.register_next_step_handler(msg, handle_edit_item_payload)
+    res = try_gift_present(present_id)
     
     if res:
-        bot.answer_callback_query(call.id, "Updated!")
+        bot.answer_callback_query(call.id, "Changed status to gifted!")
     else:
-        bot.answer_callback_query(call.id, "Cannot update this right now.")
+        bot.answer_callback_query(call.id, "Cannot change status right now.")
 
-    # Update the existing message in-place to reflect the new state
-    show_present(chat_id, present_id, edit_message_id=call.message.message_id)
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("edit:"))
+def on_edit_clicked(call: types.CallbackQuery):
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "Not authorized.")
+        return
+    
+    chat_id = call.message.chat.id
+    try:
+        _, present_id, edit_type = call.data.split(":", 2)  # photo, link, desc, name
+        
+    except Exception:
+        bot.answer_callback_query(call.id, "Invalid present id.")
+        return
+
+    if edit_type not in {"photo", "link", "desc"}:
+        bot.answer_callback_query(call.id, "Unsupported edit type.")
+        return
+
+    bot.answer_callback_query(call.id)
+
+    msg = bot.send_message(chat_id, f"Editing {edit_type}. Please send the new value or /cancel to abort.")
+    
+    bot.register_next_step_handler(
+        msg,
+        handle_edit_item_payload,
+        present_id,
+        edit_type
+    )
+    
+
+def handle_edit_item_payload(msg: types.Message, present_id: int, edit_type: str):
+    chat_id = msg.chat.id
+
+    # cancellation
+    if msg.text and msg.text.strip().lower() == "/cancel":
+        bot.reply_to(msg, "Cancelled.")
+        return
+
+    try:
+        if edit_type == "photo":
+            # Prefer a real photo or image document
+            new_value = None
+            if getattr(msg, "content_type", "") == "photo" and msg.photo:
+                new_value = msg.photo[-1].file_id
+            elif getattr(msg, "content_type", "") == "document" and msg.document and (msg.document.mime_type or "").startswith("image/"):
+                new_value = msg.document.file_id
+            elif msg.text:
+                # Allow pasting a file_id or URL as a fallback
+                new_value = msg.text.strip()
+
+            if not new_value:
+                sent = bot.reply_to(msg, "Please send a photo (or image file), or paste a valid file_id/URL. /cancel to abort.")
+                bot.register_next_step_handler(sent, handle_edit_item_payload, present_id, edit_type)
+                return
+
+            set_present_photo_url(present_id, new_value)
+            bot.reply_to(msg, "Photo updated.")
+
+        elif edit_type == "link":
+            if not msg.text or not msg.text.strip():
+                sent = bot.reply_to(msg, "Please send a non-empty link. /cancel to abort.")
+                bot.register_next_step_handler(sent, handle_edit_item_payload, present_id, edit_type)
+                return
+            set_present_link(present_id, msg.text.strip())
+            bot.reply_to(msg, "Link updated.")
+
+        elif edit_type == "desc":
+            if msg.text is None:
+                sent = bot.reply_to(msg, "Please send text for the description. /cancel to abort.")
+                bot.register_next_step_handler(sent, handle_edit_item_payload, present_id, edit_type)
+                return
+            set_present_description(present_id, msg.text)
+            bot.reply_to(msg, "Description updated.")
+
+        else:
+            bot.reply_to(msg, "Unsupported edit type.")
+
+    except Exception as e:
+        # Friendly error, re-prompt
+        sent = bot.reply_to(msg, f"Update failed: {e}\nPlease try again, or /cancel.")
+        bot.register_next_step_handler(sent, handle_edit_item_payload, present_id, edit_type)
+
 
 
 @bot.message_handler(commands=["cancel"])
