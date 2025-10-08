@@ -19,14 +19,12 @@
 For polling mode: 
  
    ```bash
-   cp .env.dev .env
    # put your token in BOT_TOKEN=123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ
    # optionally set DB_PATH= to your SQLite DB path
    # put your admin user ID in ADMIN_USER_ID=123456789
    ```
-For webhook mode: 
+For webhook mode add next : 
    ```bash
-   cp .env.dev .env
    # WEBHOOK_BASE=https://bot.example.com
    # WEBHOOK_SECRET_TOKEN=some-long-random-string
    # APP_HOST=127.0.0.1
