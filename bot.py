@@ -100,11 +100,11 @@ def show_present(chat_id: int, present_id: int) -> None:
     kb = types.InlineKeyboardMarkup()
 
     if (booked and not gifted):
-        lines.append(f"\n<b align='center'>Booked{' by you' if int(data.get("giver_chat_id") or 0) == int(chat_id) else ''}</b>")
+        lines.append(f"\n<b>Booked{' by you' if int(data.get('giver_chat_id') or 0) == int(chat_id) else ''}</b>")
         if int(data.get("giver_chat_id") or 0) == int(chat_id):
             kb.add(types.InlineKeyboardButton(text="Unbook", callback_data=f"unbook:{data['id']}"))
     elif gifted:
-          lines.append(f"\n<b align='center'>Gifted</b>")
+          lines.append(f"\n<b>Gifted</b>")
 
     if (not booked and not gifted):
         kb.add(types.InlineKeyboardButton(text="Book", callback_data=f"book:{data['id']}"))
