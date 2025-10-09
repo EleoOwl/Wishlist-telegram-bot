@@ -14,10 +14,19 @@
 
 ## Setup
 1. **Create a bot** with BotFather and copy the token.
-2. **Clone** the project and create a `.env` from the example:
+2. **Clone** the project and create a `.env` file from the example:
+ 
+For polling mode: 
+ 
    ```bash
-   cp .env.dev .env
-   # put your token in BOT_TOKEN=
+   # put your token in BOT_TOKEN=123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ
    # optionally set DB_PATH= to your SQLite DB path
-   # put your admin user ID in ADMIN_USER_ID=
+   # put your admin user ID in ADMIN_USER_ID=123456789
+   ```
+For webhook mode add next : 
+   ```bash
+   # WEBHOOK_BASE=https://bot.example.com
+   # WEBHOOK_SECRET_TOKEN=some-long-random-string
+   # APP_HOST=127.0.0.1
+   # APP_PORT=8080
    ```

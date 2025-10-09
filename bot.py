@@ -1,9 +1,10 @@
+from ast import Try, TryStar
 import telebot
 from telebot import types
 import html
 from typing import List
 
-from config import BOT_TOKEN, ADMIN_USER_ID
+from config import BOT_TOKEN, ADMIN_USER_ID, WEBHOOK_PATH, WEBHOOK_BASE, WEBHOOK_SECRET_TOKEN, APP_HOST, APP_PORT
 from db import (
     init_db, 
     create_present, 
@@ -17,8 +18,10 @@ from db import (
     try_delete_present, 
     set_present_photo_url, 
     set_present_link, 
-    set_present_description)
-from helpers import make_show_keyboard, is_admin, parse_additem_payload
+    set_present_description,
+    set_present_price,
+    set_present_currency)
+from helpers import make_show_keyboard, is_admin, parse_additem_payload, parse_price
 
 # --- Bootstrapping ---
 init_db()
@@ -111,6 +114,7 @@ def show_present(chat_id: int, present_id: int) -> None:
         kb.add(types.InlineKeyboardButton(text="Edit photo", callback_data=f"edit:{data['id']}:photo"))
         kb.add(types.InlineKeyboardButton(text="Edit link", callback_data=f"edit:{data['id']}:link"))
         kb.add(types.InlineKeyboardButton(text="Edit description", callback_data=f"edit:{data['id']}:desc"))
+        kb.add(types.InlineKeyboardButton(text="Edit price", callback_data=f"edit:{data['id']}:price"))
         kb.add(types.InlineKeyboardButton(text="Delete", callback_data=f"delete:{data['id']}"))
         kb.add(types.InlineKeyboardButton(text="Mark gifted", callback_data=f"gift:{data['id']}"))
 
@@ -187,8 +191,9 @@ def on_unbook_clicked(call: types.CallbackQuery):
 
 @bot.message_handler(commands=["additem"])
 def on_add_item_command(msg: types.Message):
+    # Allow only admin to continue the flow
     if not is_admin(msg.from_user.id):
-        bot.reply_to(msg, "Sorry, this command is only available to the admin.")
+        bot.answer_callback_query(msg.id, "Not authorized.")
         return
 
     instruction = (
@@ -206,6 +211,7 @@ def handle_add_item_payload(msg: types.Message):
     if not is_admin(msg.from_user.id):
         bot.reply_to(msg, "Not authorized.")
         return
+
     if not msg.text:
         sent = bot.reply_to(msg, "I need text in the required format. Try again or /cancel.")
         bot.register_next_step_handler(sent, handle_add_item_payload)
@@ -233,7 +239,13 @@ def handle_add_item_payload(msg: types.Message):
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("delete:"))
 def on_delete_clicked(call: types.CallbackQuery):
+    # Allow only admin to continue the flow
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "Not authorized.")
+        return
+    
     chat_id = call.message.chat.id
+    
     try:
         present_id = int(call.data.split(":", 1)[1])
     except Exception:
@@ -249,7 +261,13 @@ def on_delete_clicked(call: types.CallbackQuery):
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("gift:"))
 def on_gift_clicked(call: types.CallbackQuery):
+    # Allow only admin to continue the flow
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "Not authorized.")
+        return
+
     chat_id = call.message.chat.id
+    
     try:
         present_id = int(call.data.split(":", 1)[1])
     except Exception:
@@ -265,19 +283,20 @@ def on_gift_clicked(call: types.CallbackQuery):
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("edit:"))
 def on_edit_clicked(call: types.CallbackQuery):
+    # Allow only admin to continue the flow
     if not is_admin(call.from_user.id):
         bot.answer_callback_query(call.id, "Not authorized.")
         return
     
     chat_id = call.message.chat.id
     try:
-        _, present_id, edit_type = call.data.split(":", 2)  # photo, link, desc, name
+        _, present_id, edit_type = call.data.split(":", 2)  # photo, link, desc, price
         
     except Exception:
         bot.answer_callback_query(call.id, "Invalid present id.")
         return
 
-    if edit_type not in {"photo", "link", "desc"}:
+    if edit_type not in {"photo", "link", "desc", "price"}:
         bot.answer_callback_query(call.id, "Unsupported edit type.")
         return
 
@@ -336,6 +355,22 @@ def handle_edit_item_payload(msg: types.Message, present_id: int, edit_type: str
                 return
             set_present_description(present_id, msg.text)
             bot.reply_to(msg, "Description updated.")
+        elif edit_type == "price":
+            if msg.text is None:
+                sent = bot.reply_to(msg, "Please send text for the price in format: 10 EUR. /cancel to abort.")
+                bot.register_next_step_handler(sent, handle_edit_item_payload, present_id, edit_type)
+                return
+            try: 
+                price_val, price_currency = parse_price(msg.text)
+                set_present_price(present_id, price_val)
+                set_present_currency(present_id, price_currency)
+                bot.reply_to(msg, "Price updated.") 
+            except ValueError as e:
+                print('valueerror before')
+                sent = bot.reply_to(msg, f"Invalid price: {e}\nPlease correct and resend, or /cancel.")
+                print('valueerror reply')
+                bot.register_next_step_handler(msg, handle_edit_item_payload, present_id, edit_type)
+                return
 
         else:
             bot.reply_to(msg, "Unsupported edit type.")
@@ -352,11 +387,66 @@ def on_cancel(msg: types.Message):
     bot.reply_to(msg, "Cancelled.")
 
 
-# --- Entry point ---
+# --- Entry point: webhook (Flask) or polling based on env ---
+
+import time
+
+def run_polling_mode(bot: telebot.TeleBot):
+    try:
+        bot.remove_webhook()
+    except Exception:
+        pass
+    bot.infinity_polling(skip_pending=True)
+
+def run_webhook_mode(bot: telebot.TeleBot):
+    # Lazy-import Flask so polling users don't need it installed
+    try:
+        from flask import Flask, request, abort
+        from telebot import types as tb_types
+    except Exception as e:
+        print(f"[warn] Flask not available ({e}). Falling back to polling.")
+        return run_polling_mode(bot)
+
+    app = Flask(__name__)
+
+    @app.get("/health")
+    def health():
+        return "ok"
+
+    @app.post(WEBHOOK_PATH)
+    def telegram_webhook():
+        # Verify Telegram secret header
+        secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if WEBHOOK_SECRET_TOKEN and secret != WEBHOOK_SECRET_TOKEN:
+            abort(403)
+
+        upd_json = request.get_json(silent=True) or {}
+        if not upd_json:
+            return "ok"
+        update = tb_types.Update.de_json(upd_json)
+        bot.process_new_updates([update])
+        return "ok"
+
+    # (Re)set webhook to HTTPS endpoint
+    try:
+        bot.remove_webhook()
+    except Exception:
+        pass
+    time.sleep(0.3)
+    bot.set_webhook(url=f"{WEBHOOK_BASE}{WEBHOOK_PATH}", secret_token=WEBHOOK_SECRET_TOKEN)
+
+    # Bind address/port for the local app
+    app.run(host=APP_HOST, port=int(APP_PORT))
+
+def should_use_webhook() -> bool:
+    return bool(WEBHOOK_BASE)
 
 def main():
-    # Polling is simple for development; switch to webhooks in production
-    bot.infinity_polling(skip_pending=True)
+    global bot 
+    if should_use_webhook():
+        run_webhook_mode(bot)
+    else:
+        run_polling_mode(bot)
 
 if __name__ == "__main__":
     main()
