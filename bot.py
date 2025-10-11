@@ -1,4 +1,3 @@
-from ast import Try, TryStar
 import telebot
 from telebot import types
 import html
