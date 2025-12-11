@@ -4,23 +4,8 @@ import html
 from typing import List
 
 from config import BOT_TOKEN, ADMIN_USER_ID, WEBHOOK_PATH, WEBHOOK_BASE, WEBHOOK_SECRET_TOKEN, APP_HOST, APP_PORT
-from db import (
-    init_db, 
-    create_present, 
-    get_present_by_id, 
-    try_book_present,
-    try_unbook_present, 
-    try_unbook_present,
-    try_gift_present,
-    list_presents, 
-    list_booked_presents,
-    try_delete_present, 
-    set_present_photo_url, 
-    set_present_link, 
-    set_present_description,
-    set_present_price,
-    set_present_currency)
-from helpers import make_show_keyboard, is_admin, parse_additem_payload, parse_price
+from db import *
+from helpers import *
 
 # --- Bootstrapping ---
 init_db()
@@ -31,6 +16,8 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 PUBLIC_COMMANDS = [
     types.BotCommand("show", " Show"),
     types.BotCommand("mybookings", "My bookings"),
+    types.BotCommand("mywishlist", "My wishlist"),
+    types.BotCommand("additem", "Add item to my wishlist")
 ]
 bot.set_my_commands(PUBLIC_COMMANDS)
 
@@ -38,7 +25,7 @@ bot.set_my_commands(PUBLIC_COMMANDS)
 # --- Admin-specific command list ---
 if ADMIN_USER_ID:
     ADMIN_COMMANDS = PUBLIC_COMMANDS + [
-        types.BotCommand("additem", "Add item")
+        #types.BotCommand("additem", "Add item")
         ]
     try:
         bot.set_my_commands(
@@ -50,20 +37,21 @@ if ADMIN_USER_ID:
 
 
 # ----- Helpers -----
-def send_presents_list(chat_id: int, presents:  List[dict], message: str) -> None:
+def send_buttons_list(chat_id: int, items:  List[dict], message: str, callback_command_prefix: str) -> None:
     """Sends an inline keyboard with every present name as a button."""
-    if not presents:
-        bot.send_message(chat_id, "No presents found.")
+    if not items:
+        bot.send_message(chat_id, "No items found.")
         return
 
     kb = types.InlineKeyboardMarkup()
-    # one button per row; you can group if you prefer
-    for p in presents:
+    # one button per row
+    for p in items:
         kb.add(types.InlineKeyboardButton(
             text=p["name"],
-            callback_data=f"present:{p['id']}"  # <= will trigger the details view
+            callback_data=f"{callback_command_prefix}:{p['id']}"  # <= will trigger the details view
         ))
     bot.send_message(chat_id, message, reply_markup=kb)
+
 
 def show_present(chat_id: int, present_id: int) -> None:
     """Loads a present and shows all fields except giver_chat_id."""
@@ -108,8 +96,8 @@ def show_present(chat_id: int, present_id: int) -> None:
     if (not booked and not gifted):
         kb.add(types.InlineKeyboardButton(text="Book", callback_data=f"book:{data['id']}"))
     
-    # --- Admin buttons ---
-    if is_admin(chat_id):
+    # --- Owner buttons ---
+    if chat_id == data.get("owner_user_id"):
         kb.add(types.InlineKeyboardButton(text="Edit photo", callback_data=f"edit:{data['id']}:photo"))
         kb.add(types.InlineKeyboardButton(text="Edit link", callback_data=f"edit:{data['id']}:link"))
         kb.add(types.InlineKeyboardButton(text="Edit description", callback_data=f"edit:{data['id']}:desc"))
@@ -134,17 +122,57 @@ def on_start(msg: types.Message):
 
 @bot.message_handler(commands=["show"])
 def on_show_command(msg: types.Message):
-    send_presents_list(msg.chat.id, list_presents(), "Select a present: ")
+    bot.answer_callback_query(msg.id)
+    
+    bot.answer_callback_query(msg.id, "Please choose user wishlist to show or type telegram username to see if created:")
+
+    rb = get_user_preferences(msg.from_user.id, "showwishlist")
+    if not rb:
+        bot.send_message(msg.chat.id, "Your wishlist is empty. Add items with /additem.")
+        return
+    bot.send_message(msg.chat.id, "Select a user: ", reply_markup= rb)
 
 @bot.callback_query_handler(func=lambda c: c.data == "show")
 def on_show_callback(call: types.CallbackQuery):
     bot.answer_callback_query(call.id)
-    send_presents_list(call.message.chat.id, list_presents(), "Select a present: ")
+    
+    bot.answer_callback_query(call.id, "Please choose user wishlist to show or type telegram username to see if created:")
 
+    rb = get_user_preferences(call.from_user.id, "showwishlist")
+    if not rb:
+        bot.send_message(call.message.chat.id, "Your wishlist is empty. Add items with /additem.")
+        return
+    bot.send_message(call.message.chat.id, "Select a user: ", reply_markup= rb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("showwishlist:"))
+def on_show_callback(call: types.CallbackQuery):
+    try:
+        user_id = int(call.data.split(":", 1)[1])
+    except Exception:
+        bot.answer_callback_query(call.id, "Invalid user id.")
+        return
+
+    rb = get_presentlist_markup(user_id, "present")
+    if not rb:
+        bot.send_message(call.message.chat.id, "User wishlist is empty :(")
+        return
+    bot.send_message(call.message.chat.id, "Select a present: ", reply_markup= rb)
+
+
+@bot.message_handler(commands=["mywishlist"])
+def on_show_command(msg: types.Message):
+    rb = get_presentlist_markup(msg.from_user.id, "present")
+    if not rb:
+        bot.send_message(msg.chat.id, "Your wishlist is empty. Add items with /additem.")
+        return
+    bot.send_message(msg.chat.id, "Select a present: ", reply_markup= rb)
 
 @bot.message_handler(commands=["mybookings"])
 def on_show_command(msg: types.Message):
-    send_presents_list(msg.chat.id, list_booked_presents(msg.chat.id), "Booked by you: ")
+    
+    
+    send_buttons_list(msg.chat.id, list_booked_presents(msg.chat.id), "Booked by you: ")
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("present:"))
 def on_present_clicked(call: types.CallbackQuery):
@@ -190,27 +218,17 @@ def on_unbook_clicked(call: types.CallbackQuery):
 
 @bot.message_handler(commands=["additem"])
 def on_add_item_command(msg: types.Message):
-    # Allow only admin to continue the flow
-    if not is_admin(msg.from_user.id):
-        bot.answer_callback_query(msg.id, "Not authorized.")
-        return
-
-    instruction = (
-        "Please send the present in this format:\n"
-         "Name: Lego Technic Car\n"
+    instruction = "Please send the present in this format or type /cancel to abort:\n\n"
+    template = (
+        "Name: Lego Technic Car\n"
         "Description: Red sports model\n"
         "Price: 120 EUR\n\n"
-        "Or type /cancel to abort."
-    )
+        )
     bot.send_message(msg.chat.id, instruction)
+    bot.send_message(msg.chat.id, template)
     bot.register_next_step_handler(msg, handle_add_item_payload)
 
 def handle_add_item_payload(msg: types.Message):
-    # Allow only admin to continue the flow
-    if not is_admin(msg.from_user.id):
-        bot.reply_to(msg, "Not authorized.")
-        return
-
     if not msg.text:
         sent = bot.reply_to(msg, "I need text in the required format. Try again or /cancel.")
         bot.register_next_step_handler(sent, handle_add_item_payload)
@@ -221,7 +239,8 @@ def handle_add_item_payload(msg: types.Message):
 
     try:
         name, description, price_val, currency = parse_additem_payload(msg.text)
-        new_id = create_present(name=name, description=description, price=price_val, currency=currency)
+        new_id = create_present(name=name, description=description, price=price_val, currency=currency, owner_user_id  = msg.from_user.id)
+        create_user(msg.from_user.id, msg.from_user.username or msg.from_user.full_name or "")
         bot.reply_to(
             msg,
             f" Present successfully added .\n\n<b>Saved:</b>\n"

@@ -13,11 +13,26 @@ CREATE TABLE IF NOT EXISTS presents (
     photo_url TEXT,
     is_booked INTEGER DEFAULT 0,
     giver_chat_id INTEGER,
-    is_gifted INTEGER DEFAULT 0
+    is_gifted INTEGER DEFAULT 0,
+    owner_user_id INTEGER NOT NULL
 );
 """
 
-SEED_ITEMS = ["Apple", "Banana", "Carrot"]
+DDL_USERPREFERENCES = """ 
+CREATE TABLE IF NOT EXISTS userpreferences (
+    id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    uer_preference_id INTEGER NOT NULL
+);
+"""
+
+DDL_USERS = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    user_name TEXT NOT NULL
+)
+"""
 
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -25,21 +40,22 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 def init_db() -> None:
-    """Ensure the presents table exists."""
+    """Ensure tables exist."""
     conn = get_conn()
     try:
         conn.execute(DDL_PRESENTS)
+        conn.execute(DDL_USERS)
+        conn.execute(DDL_USERPREFERENCES)
         conn.commit()
     finally:
         conn.close()
-
-# -------- Create function (name + description + price + currency) --------
 
 def create_present(
     name: str,
     description: str,
     price: int,
     currency: str,
+    owner_user_id: Optional[int] = None,
 ) -> int:
     """
     Insert a new present row with the required fields for this operation.
@@ -60,10 +76,10 @@ def create_present(
     try:
         cur = conn.execute(
             """
-            INSERT INTO presents (name, description, price, currency)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO presents (name, description, price, currency, owner_user_id)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (name, description, price_val, currency or None),
+            (name, description, price_val, currency or None, owner_user_id or None),
         )
         conn.commit()
         return cur.lastrowid
@@ -77,7 +93,7 @@ def get_present_by_id(present_id: int) -> Optional[dict]:
         row = conn.execute(
             """
             SELECT id, name, link, description, price, currency, photo_url,
-                   is_booked, giver_chat_id, is_gifted
+                   is_booked, giver_chat_id, is_gifted, owner_user_id
             FROM presents
             WHERE id = ?
             """,
@@ -89,11 +105,17 @@ def get_present_by_id(present_id: int) -> Optional[dict]:
     finally:
         conn.close()
 
-def list_presents() -> List[dict]:
+def list_presents(owner_user_id: int) -> List[dict]:
     """Return [{id, name}] for all presents, ordered by id."""
     conn = get_conn()
     try:
-        rows = conn.execute("SELECT id, name FROM presents ORDER BY id ASC").fetchall()
+        rows = conn.execute(
+            """
+            SELECT id, name FROM presents 
+            WHERE owner_user_id = ? 
+            ORDER BY id ASC""", 
+            (owner_user_id,)
+        ).fetchall()
         return [{"id": r["id"], "name": r["name"]} for r in rows]
     finally:
         conn.close()
@@ -163,7 +185,7 @@ def try_unbook_present(present_id: int, chat_id: int ) -> dict:
     finally:
         conn.close()
 
-def try_gift_present(present_id: int) -> dict:
+def try_gift_present(present_id: int, ) -> dict:
     """
     Attempt to change status of the present to gifted
     """
@@ -191,7 +213,6 @@ def try_delete_present(present_id: int) -> dict:
     """
     conn = get_conn()
     try:
-        # Try to book if free & not gifted
         cur = conn.execute(
             """
             DELETE FROM presents
@@ -279,3 +300,82 @@ def set_present_is_gifted(present_id: int, is_gifted: Optional[bool | int]) -> N
     else:
         val = 1 if bool(is_gifted) else 0
     _update_present_field(present_id, "is_gifted", val)
+
+def create_user(user_id: int, user_name: str) -> int:
+    """
+    Insert a new user row 
+    """
+    user_name = (user_name or "").strip()
+    if not user_name:
+        raise ValueError("user_name is required")
+    try:
+        user_id_val = int(user_id)
+    except Exception as e:
+        raise ValueError("user_id must be an integer") from e
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO users (user_id, user_name)
+            VALUES (?, ?)
+            """,
+            (user_id_val, user_name),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    """Return full user row as dict (or None if not found)."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT id, user_id, user_name
+            FROM users
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+    finally:
+        conn.close()
+
+def get_user_preferences(user_id: int) -> Optional[str]:
+    """Return preferences string or None if not set."""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT user_preference_id, user_name
+            FROM userpreferences
+            INNER JOIN users ON userpreferences.user_preference_id = users.user_id
+
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchall()
+        if not rows:
+            return None
+        return [{"id": r["user_preference_id"], "name": r["user_name"]} for r in rows]
+    finally:
+        conn.close()
+
+def set_user_preferences(user_id: int, user_preference_id: str) -> None:
+    """Set preferences user for the user."""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO userpreferences (user_id, user_preference_id)
+            VALUES (?, ?,)
+            """,
+            (user_id, user_preference_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+

@@ -1,8 +1,9 @@
 import telebot
 from telebot import types
 import re
-from db import init_db, create_present
+from db import *
 from config import ADMIN_USER_ID
+from typing import List
 
 def make_show_keyboard() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup()
@@ -11,6 +12,33 @@ def make_show_keyboard() -> types.InlineKeyboardMarkup:
 
 def is_admin(user_id: int) -> bool:
     return ADMIN_USER_ID and int(user_id) == int(ADMIN_USER_ID)
+
+def get_presentlist_markup(owner_user_id: int, callback_command_prefix: str) -> Optional[types.InlineKeyboardMarkup]:
+    presents = list_presents(owner_user_id)
+    if not presents:
+        return None
+
+    kb = types.InlineKeyboardMarkup()
+    for present in presents:
+        kb.add(types.InlineKeyboardButton(
+            text=present["name"],
+            callback_data=f"{callback_command_prefix}:{present['id']}"  
+        ))
+    return kb
+
+def get_userlist_markup(user_id, callback_command_prefix: str) -> types.InlineKeyboardMarkup:
+    listed_users = get_user_preferences(user_id)
+
+    if not listed_users:
+        return None
+
+    kb = types.InlineKeyboardMarkup()
+    for user in listed_users:
+        kb.add(types.InlineKeyboardButton(
+            text=user["name"],
+            callback_data=f"{callback_command_prefix}:{user["id"]}"  
+        ))
+    return kb
 
 def parse_price(text: str):
     parts = text.split()
